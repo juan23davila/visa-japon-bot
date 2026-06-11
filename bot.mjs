@@ -11,6 +11,7 @@
 //   node --env-file=.env bot.mjs --test-alert # fire a test alert and exit
 import { chromium } from 'playwright';
 import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { CONFIG } from './config.mjs';
 import { alertOpen, testAlert } from './notify.mjs';
 
@@ -26,8 +27,9 @@ function inRange(y, m, d) {
   return iso >= CONFIG.targetFrom && iso <= CONFIG.targetTo;
 }
 
-// Read the currently displayed month: a day is OPEN if its cell has a reserve link.
-async function readMonth(page) {
+// Read the currently displayed month. Availability is signalled by the day's ICON:
+//   icon_disabled.svg = full (x)   |   icon_circle.svg (any non-disabled) = available (o)   |   no icon = no service
+export async function readMonth(page) {
   return await page.evaluate(() => {
     const header = (document.querySelector('.date')?.innerText || '').replace(/\s+/g, ' ').trim();
     const mm = header.match(/(\d{4})\D+(\d{1,2})/);
@@ -37,10 +39,11 @@ async function readMonth(page) {
     for (const c of document.querySelectorAll('.sc_cal_month_itemlist')) {
       const num = c.querySelector('.sc_cal_date')?.innerText.trim();
       if (!num) continue;
-      const open = !!c.querySelector('a.js_move_reserve_for_day, a.js_move_reserve');
       const img = c.querySelector('.c_cal_time_cell img');
       const icon = img ? (img.getAttribute('src') || '').split('/').pop().split('?')[0] : null;
-      days.push({ day: +num, open, full: !!(icon && icon.includes('disabled')) });
+      const open = !!icon && !icon.includes('disabled'); // has an icon that is not the "full" one
+      const full = !!icon && icon.includes('disabled');
+      days.push({ day: +num, open, full, icon });
     }
     return { header, year, month, days };
   });
@@ -118,13 +121,25 @@ function openInRange(m) {
 }
 
 // Best-effort: click the open day to advance toward the form (no data, no submit).
+// Tries known reserve links, then falls back to the availability icon / cell.
 async function clickDay(page, day) {
   const cell = page.locator('.sc_cal_month_itemlist')
     .filter({ has: page.locator(`.sc_cal_date:text-is("${day}")`) });
-  const link = cell.locator('a.js_move_reserve_for_day, a.js_move_reserve').first();
-  await link.click({ timeout: 8000 });
-  await page.waitForLoadState('networkidle').catch(() => {});
-  await page.waitForTimeout(1500);
+  const candidates = [
+    cell.locator('a.js_move_reserve_for_day, a.js_move_reserve'),
+    cell.locator('.c_cal_time_cell a'),
+    cell.locator('.c_cal_time_cell img'),
+    cell.locator('.c_cal_time_cell'),
+  ];
+  for (const loc of candidates) {
+    if ((await loc.count()) > 0) {
+      await loc.first().click({ timeout: 8000 }).catch(() => {});
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForTimeout(1500);
+      return true;
+    }
+  }
+  return false;
 }
 
 async function handleOpen(page, hit) {
@@ -227,4 +242,6 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error('FATAL:', e); process.exit(1); });
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((e) => { console.error('FATAL:', e); process.exit(1); });
+}

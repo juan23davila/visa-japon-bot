@@ -9,8 +9,8 @@ export const CONFIG = {
   targetTo: process.env.TARGET_TO ?? '2026-07-07',
 
   // Respectful polling: base interval +/- jitter (ms). Lower = faster but higher ban risk.
-  pollIntervalMs: Number(process.env.POLL_INTERVAL_MS ?? 90_000),
-  pollJitterMs: Number(process.env.POLL_JITTER_MS ?? 30_000),
+  pollIntervalMs: Number(process.env.POLL_INTERVAL_MS ?? 60_000),
+  pollJitterMs: Number(process.env.POLL_JITTER_MS ?? 20_000),
 
   // Keep a visible window so you can finish the reservation by hand when a slot is found.
   headless: (process.env.HEADLESS ?? 'false') === 'true',

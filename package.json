@@ -7,7 +7,8 @@
   "scripts": {
     "start": "caffeinate -i node --env-file=.env bot.mjs",
     "once": "node --env-file=.env bot.mjs --once",
-    "test-alert": "node --env-file=.env bot.mjs --test-alert"
+    "test-alert": "node --env-file=.env bot.mjs --test-alert",
+    "test": "node test-deteccion.mjs"
   },
   "dependencies": {
     "playwright": "^1.60.0"
