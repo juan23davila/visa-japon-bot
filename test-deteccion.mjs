@@ -2,6 +2,7 @@
 // first FULL day found, then running the REAL readMonth() from bot.mjs. No reservation is made.
 import { chromium } from 'playwright';
 import { readMonth, readDaySlots } from './bot.mjs';
+import { parseApplicants } from './config.mjs';
 const CAL = 'https://embjpcol.rsvsys.jp/reservations/calendar';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -57,6 +58,19 @@ console.log('\nfranjas extraidas del DOM simulado:', JSON.stringify(slots));
 const pass2 = slots.length === 1 && slots[0].time === '09:30' && slots[0].remaining === 2;
 console.log(pass2 ? 'PASS test 2: solo cuenta franjas reservables (link), ignora las grises' : 'FAIL test 2: extraccion de franjas incorrecta');
 
-console.log(pass1 && pass2 ? '\nPASS total' : '\nFAIL total');
-process.exitCode = pass1 && pass2 ? 0 : 1;
+// --- Test 3: applicants list parsing (priority order, sane fallbacks) ---
+const cases = [
+  ['2,1', [2, 1]],
+  ['2', [2]],
+  ['1', [1]],
+  ['', [2]],
+  ['5,2', [2]],
+  ['x', [2]],
+  ['2, 1, 2', [2, 1]],
+];
+const pass3 = cases.every(([raw, want]) => JSON.stringify(parseApplicants(raw)) === JSON.stringify(want));
+console.log(pass3 ? '\nPASS test 3: parseo de APPLICANTS (prioridad y fallbacks)' : '\nFAIL test 3: parseo de APPLICANTS');
+
+console.log(pass1 && pass2 && pass3 ? '\nPASS total' : '\nFAIL total');
+process.exitCode = pass1 && pass2 && pass3 ? 0 : 1;
 await b.close();

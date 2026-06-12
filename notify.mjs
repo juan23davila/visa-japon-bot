@@ -56,10 +56,10 @@ function macSound(times = 8) {
   execFile('say', ['-v', 'Paulina', 'Cupo de visa disponible. Corre al computador.'], () => {});
 }
 
-export async function alertOpen(CONFIG, { dateLabel, timeLabel, note = '' }) {
+export async function alertOpen(CONFIG, { dateLabel, timeLabel, note = '', applicants }) {
   const msg = `🟢 CUPO DE VISA DISPONIBLE\n`
     + `Fecha: ${dateLabel}${timeLabel ? `\nHoras: ${timeLabel}` : ''}\n`
-    + `Solicitantes: ${CONFIG.applicants}\n`
+    + `Cupo para: ${applicants ?? CONFIG.applicantsLabel} solicitante(s)\n`
     + (note ? `⚠️ ${note}\n` : '')
     + `El navegador quedo abierto en la pagina. Entra y CONFIRMA ya, el cupo puede irse en segundos.`;
   if (CONFIG.sound) macSound();

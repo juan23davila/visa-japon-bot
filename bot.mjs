@@ -70,13 +70,13 @@ async function ensureMonthView(page) {
   } catch { /* best effort */ }
 }
 
-// Guarantee the applicants dropdown equals CONFIG.applicants before reading availability.
+// Guarantee the applicants dropdown equals `n` before reading availability.
 // This matters for correctness: a day with only 1 free slot must NOT count as open for 2.
 // Returns the verified value in the DOM (string), or null if it could not be set.
-async function ensureStock(page) {
+async function ensureStock(page, n) {
   try {
     await page.waitForSelector('#stock', { timeout: 8000 });
-    const want = String(CONFIG.applicants);
+    const want = String(n);
     if ((await page.$eval('#stock', (el) => el.value)) === want) return want;
     await Promise.all([
       // The applicants selector triggers a different reload per view: a calendar POST on
@@ -191,7 +191,7 @@ export async function readDaySlots(page) {
 }
 
 // Level-2 verification. The month circle only means "some capacity exists"; it does NOT
-// guarantee a slot for CONFIG.applicants (e.g. 1 seat left but 2 needed). Open the day,
+// guarantee a slot for the wanted applicants (e.g. 1 seat left but 2 needed). Open the day,
 // re-verify the applicants selector there, and require a bookable slot before alerting.
 async function verifyAndAlert(page, hits) {
   for (let i = 0; i < hits.length; i++) {
@@ -213,14 +213,20 @@ async function verifyAndAlert(page, hits) {
         await handleOpen(page, hit, [], 'No pude verificar las franjas, revisa el navegador');
         return true;
       }
-      await ensureStock(page); // the day view has its own applicants selector
-      const slots = await readDaySlots(page);
-      if (slots.length) {
-        log(`  ${dateLabel}: ${slots.length} franja(s) con cupo para ${CONFIG.applicants}: ${slots.map((s) => s.time || '?').join(', ')}`);
-        await handleOpen(page, hit, slots);
-        return true;
+      // Try each accepted applicants count in priority order on the day view (it has
+      // its own #stock selector; changing it reloads the slot list).
+      for (const n of CONFIG.applicantsList) {
+        await ensureStock(page, n);
+        const slots = await readDaySlots(page);
+        if (slots.length) {
+          const maxWanted = Math.max(...CONFIG.applicantsList);
+          const note = n < maxWanted ? `Cupo SOLO para ${n} persona(s) en esta franja, no para ${maxWanted}` : '';
+          log(`  ${dateLabel}: ${slots.length} franja(s) con cupo para ${n}: ${slots.map((s) => s.time || '?').join(', ')}`);
+          await handleOpen(page, hit, slots, note, n);
+          return true;
+        }
       }
-      log(`  ${dateLabel}: circulo en el mes pero NINGUNA franja admite ${CONFIG.applicants} solicitante(s) todavia. No alerto.`);
+      log(`  ${dateLabel}: circulo en el mes pero NINGUNA franja admite ${CONFIG.applicantsLabel} solicitante(s) todavia. No alerto.`);
       await page.screenshot({ path: `${SHOTS}nofit-${dateLabel}.png`, fullPage: true }).catch(() => {});
     } catch (e) {
       log(`  ${dateLabel}: error verificando franjas (${e.message}). Alerto por precaucion.`);
@@ -231,21 +237,21 @@ async function verifyAndAlert(page, hits) {
   return false;
 }
 
-async function handleOpen(page, hit, slots = [], note = '') {
+async function handleOpen(page, hit, slots = [], note = '', applicants = CONFIG.applicantsLabel) {
   const dateLabel = `${hit.year}-${String(hit.month).padStart(2, '0')}-${String(hit.day).padStart(2, '0')}`;
   const timeLabel = slots.map((s) => s.time).filter(Boolean).slice(0, 4).join(', ');
-  log(`🟢 CUPO DETECTADO: ${dateLabel}${timeLabel ? ` (${timeLabel})` : ''}. Avisando...`);
+  log(`🟢 CUPO DETECTADO: ${dateLabel}${timeLabel ? ` (${timeLabel})` : ''} para ${applicants} solicitante(s). Avisando...`);
   await page.bringToFront().catch(() => {});
   await page.screenshot({ path: `${SHOTS}FOUND-${dateLabel}.png`, fullPage: true }).catch(() => {});
-  await alertOpen(CONFIG, { dateLabel, timeLabel, note });
-  writeFileSync(LOCK, `FOUND ${dateLabel} ${timeLabel} at ${new Date().toISOString()}\n`.replace('  ', ' '));
+  await alertOpen(CONFIG, { dateLabel, timeLabel, note, applicants });
+  writeFileSync(LOCK, `FOUND ${dateLabel} ${timeLabel} for ${applicants} at ${new Date().toISOString()}\n`.replace('  ', ' '));
   log('  Alerta enviada. El navegador queda en la lista de franjas. Termina la reserva a mano.');
 }
 
 // Visible status banner so you can trust the bot is watching the whole range,
 // no matter which month the calendar happens to be showing.
 async function showBanner(page, confirmedCount, note = '') {
-  const txt = `🤖 Bot activo | ${CONFIG.applicants} solicitantes | Vigilando ${CONFIG.targetFrom} a ${CONFIG.targetTo} | `
+  const txt = `🤖 Bot activo | busca para ${CONFIG.applicantsLabel} | Vigilando ${CONFIG.targetFrom} a ${CONFIG.targetTo} | `
     + `ultimo chequeo ${new Date().toLocaleTimeString('es-CO')} | cupos confirmados: ${confirmedCount}`
     + (note ? ` | ${note}` : '')
     + ` | proximo chequeo en ~${Math.round(CONFIG.pollIntervalMs / 1000)}s`;
@@ -270,7 +276,7 @@ async function main() {
   }
 
   log('=== Bot de cita de visa | Embajada de Japon en Colombia ===');
-  log(`Rango objetivo : ${CONFIG.targetFrom} -> ${CONFIG.targetTo}  | solicitantes: ${CONFIG.applicants}`);
+  log(`Rango objetivo : ${CONFIG.targetFrom} -> ${CONFIG.targetTo}  | solicitantes: ${CONFIG.applicantsLabel} (prioridad: ${CONFIG.applicantsList[0]})`);
   log(`Polling        : ${CONFIG.pollIntervalMs / 1000}s +/- ${CONFIG.pollJitterMs / 1000}s  | headless: ${CONFIG.headless}`);
   log(`WhatsApp       : ${CONFIG.whatsapp.phone ? 'configurado (' + CONFIG.whatsapp.phone + ')' : 'NO configurado'}`);
 
@@ -291,25 +297,27 @@ async function main() {
     cycle++;
     try {
       await gotoCalendar(page);
-      let stockDom = await ensureStock(page);
+      // Month-level reading uses the MOST permissive count (min): the circle is only a
+      // trigger, and the day-level check decides how many applicants actually fit.
+      let stockDom = await ensureStock(page, CONFIG.applicantsMin);
       const parts = [];
       const hits = [];
       for (const t of targets) {
         const reached = await goToMonth(page, t.year, t.month);
         if (!reached) { parts.push(`${t.year}-${String(t.month).padStart(2, '0')}: no navegable`); continue; }
-        stockDom = await ensureStock(page);
+        stockDom = await ensureStock(page, CONFIG.applicantsMin);
         const m = await readMonth(page);
         hits.push(...openInRange(m));
         parts.push(`${m.header} (${stat(m)})`);
       }
-      log(`ciclo ${cycle} [solicitantes en el sitio: ${stockDom}]: ${parts.join(' | ')} | en tu rango: ${hits.length}`);
+      log(`ciclo ${cycle} [busca para: ${CONFIG.applicantsLabel} | stock lectura: ${stockDom}]: ${parts.join(' | ')} | en tu rango: ${hits.length}`);
 
       let nofitNote = '';
       if (hits.length) {
         const dates = hits.map((h) => `${h.year}-${String(h.month).padStart(2, '0')}-${String(h.day).padStart(2, '0')}`).join(', ');
         log(`  candidatos con circulo en rango: ${dates}. Verificando franjas por hora...`);
         if (await verifyAndAlert(page, hits)) { found = true; break; }
-        nofitNote = `circulo en ${dates} pero sin franja para ${CONFIG.applicants} aun`;
+        nofitNote = `circulo en ${dates} pero sin franja para ${CONFIG.applicantsLabel} aun`;
         await gotoCalendar(page); // verification leaves the day view; reset for the resting state
       }
 

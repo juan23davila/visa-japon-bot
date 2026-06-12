@@ -1,8 +1,22 @@
 // Central configuration. Secrets come from env.
 // Run with: node --env-file=.env bot.mjs   (or use the npm scripts)
+
+// Applicants accepted, in PRIORITY order. "2,1" means: prefer a slot for 2 people,
+// but a slot for 1 also triggers the alert (clearly labelled). "2" behaves as before.
+export function parseApplicants(raw) {
+  const list = String(raw ?? '2').split(',')
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 3);
+  return list.length ? [...new Set(list)] : [2];
+}
+
+const applicantsList = parseApplicants(process.env.APPLICANTS);
+
 export const CONFIG = {
   calendarUrl: 'https://embjpcol.rsvsys.jp/reservations/calendar',
-  applicants: Number(process.env.APPLICANTS ?? 2),
+  applicantsList,
+  applicantsMin: Math.min(...applicantsList),
+  applicantsLabel: applicantsList.join(' o '),
 
   // Target window (inclusive), ISO yyyy-mm-dd: from today through the first week of July.
   targetFrom: process.env.TARGET_FROM ?? '2026-06-10',

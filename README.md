@@ -7,9 +7,11 @@ no que alcance para tu numero de solicitantes:
 
 1. **Nivel 1 (mes):** detecta dias que pasan de **× completo** a **○ disponible**
    dentro de tu rango de fechas.
-2. **Nivel 2 (dia):** entra al dia, fija tu numero de solicitantes y exige una
-   **franja horaria reservable** (las franjas sin cupo suficiente salen en gris).
-   Sin franja valida, NO hay alerta (evita falsas alarmas de cupos para 1 persona).
+2. **Nivel 2 (dia):** entra al dia y exige una **franja horaria reservable** (las
+   franjas sin cupo suficiente salen en gris). Prueba cada cantidad configurada en
+   orden de prioridad: con `APPLICANTS=2,1` busca primero cupo para 2 y, si no hay,
+   cupo para 1. La alerta dice claramente para cuantas personas alcanza. Sin franja
+   valida no hay alerta.
 3. Si hay franja: trae el navegador al frente en la lista de horas, te dispara
    **WhatsApp + llamada + alarma sonora**, y se detiene para que tu **confirmes a
    mano** (no maneja tus datos de pasaporte).
@@ -75,7 +77,7 @@ npm run once
 | Variable | Que hace |
 |---|---|
 | `TARGET_FROM` / `TARGET_TO` | Rango de fechas objetivo (ISO `yyyy-mm-dd`). |
-| `APPLICANTS` | Numero de solicitantes (2). |
+| `APPLICANTS` | Cantidades aceptadas en orden de prioridad: `2,1` (prefiere 2, acepta 1), `2` o `1`. |
 | `POLL_INTERVAL_MS` | Intervalo base entre chequeos. Menor = mas rapido pero mas riesgo de bloqueo. |
 | `POLL_JITTER_MS` | Variacion aleatoria del intervalo (parecer humano). |
 | `HEADLESS` | `false` para ver la ventana (necesario para confirmar a mano). |
