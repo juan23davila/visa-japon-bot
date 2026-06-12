@@ -52,6 +52,22 @@ export async function readMonth(page) {
 async function gotoCalendar(page) {
   await page.goto(CONFIG.calendarUrl, { waitUntil: 'networkidle', timeout: 60000 });
   await page.waitForTimeout(1200);
+  await ensureMonthView(page);
+}
+
+// The site remembers the last view (day/week/month) in the session; month readings
+// assume the month view, so force it back if a verification left us on the day view.
+async function ensureMonthView(page) {
+  try {
+    const btn = page.locator('a.js_change[data-value="month"]').first();
+    if (!(await btn.count())) return;
+    if (await btn.evaluate((el) => el.classList.contains('active'))) return;
+    await Promise.all([
+      page.waitForResponse((r) => /reservations\/calendar/.test(r.url()), { timeout: 10000 }).catch(() => null),
+      btn.click(),
+    ]);
+    await page.waitForTimeout(1200);
+  } catch { /* best effort */ }
 }
 
 // Guarantee the applicants dropdown equals CONFIG.applicants before reading availability.
@@ -63,7 +79,9 @@ async function ensureStock(page) {
     const want = String(CONFIG.applicants);
     if ((await page.$eval('#stock', (el) => el.value)) === want) return want;
     await Promise.all([
-      page.waitForResponse((r) => /reservations\/calendar/.test(r.url()) && r.request().method() === 'POST', { timeout: 15000 }).catch(() => null),
+      // The applicants selector triggers a different reload per view: a calendar POST on
+      // the month view, interval/staff-stock requests on the day view.
+      page.waitForResponse((r) => /reservations\/(calendar|interval-stock|staff-stock)/.test(r.url()), { timeout: 6000 }).catch(() => null),
       page.selectOption('#stock', want),
     ]);
     await page.waitForTimeout(900);
@@ -142,29 +160,95 @@ async function clickDay(page, day) {
   return false;
 }
 
-async function handleOpen(page, hit) {
+// Read bookable time slots on the day view for the CURRENT applicants selection.
+// A bookable slot renders as a LINK (to reservations/option) with "残 N件"; a slot
+// without enough capacity for the selected applicants is plain grey text "残 0件".
+export async function readDaySlots(page) {
+  return await page.evaluate(() => {
+    const out = [];
+    const seen = new Set();
+    for (const a of document.querySelectorAll('a')) {
+      const href = a.getAttribute('href') || '';
+      const txt = (a.textContent || '').replace(/\s+/g, ' ').trim();
+      const m = txt.match(/残\s*(\d+)\s*件/);
+      const isOption = href.includes('reservations/option');
+      if (!isOption && !(m && +m[1] > 0)) continue;
+      let time = '';
+      const t = href.match(/time_from=([^&]+)/);
+      if (t) time = decodeURIComponent(t[1]);
+      if (!time) {
+        const row = a.closest('tr');
+        const tm = row && (row.innerText.match(/\d{1,2}:\d{2}/) || []);
+        if (tm && tm[0]) time = tm[0];
+      }
+      const key = `${time}|${href}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ time, remaining: m ? +m[1] : null });
+    }
+    return out;
+  });
+}
+
+// Level-2 verification. The month circle only means "some capacity exists"; it does NOT
+// guarantee a slot for CONFIG.applicants (e.g. 1 seat left but 2 needed). Open the day,
+// re-verify the applicants selector there, and require a bookable slot before alerting.
+async function verifyAndAlert(page, hits) {
+  for (let i = 0; i < hits.length; i++) {
+    const hit = hits[i];
+    const dateLabel = `${hit.year}-${String(hit.month).padStart(2, '0')}-${String(hit.day).padStart(2, '0')}`;
+    try {
+      if (i > 0) await gotoCalendar(page);
+      await goToMonth(page, hit.year, hit.month);
+      await ensureStock(page);
+      const clicked = await clickDay(page, hit.day);
+      if (!page.url().includes('/reservations/calendar')) {
+        log(`  ${dateLabel}: el click salto directo al flujo de reserva. Alerto.`);
+        await handleOpen(page, hit, [], 'Quedaste dentro del flujo de reserva, revisa el navegador');
+        return true;
+      }
+      const onDayView = await page.evaluate(() => /残\s*\d+\s*件/.test(document.body ? document.body.innerText : ''));
+      if (!clicked || !onDayView) {
+        log(`  ${dateLabel}: no pude abrir la lista de franjas (click=${clicked}). Alerto por precaucion.`);
+        await handleOpen(page, hit, [], 'No pude verificar las franjas, revisa el navegador');
+        return true;
+      }
+      await ensureStock(page); // the day view has its own applicants selector
+      const slots = await readDaySlots(page);
+      if (slots.length) {
+        log(`  ${dateLabel}: ${slots.length} franja(s) con cupo para ${CONFIG.applicants}: ${slots.map((s) => s.time || '?').join(', ')}`);
+        await handleOpen(page, hit, slots);
+        return true;
+      }
+      log(`  ${dateLabel}: circulo en el mes pero NINGUNA franja admite ${CONFIG.applicants} solicitante(s) todavia. No alerto.`);
+      await page.screenshot({ path: `${SHOTS}nofit-${dateLabel}.png`, fullPage: true }).catch(() => {});
+    } catch (e) {
+      log(`  ${dateLabel}: error verificando franjas (${e.message}). Alerto por precaucion.`);
+      await handleOpen(page, hit, [], 'Fallo la verificacion de franjas, revisa el navegador');
+      return true;
+    }
+  }
+  return false;
+}
+
+async function handleOpen(page, hit, slots = [], note = '') {
   const dateLabel = `${hit.year}-${String(hit.month).padStart(2, '0')}-${String(hit.day).padStart(2, '0')}`;
-  log(`🟢 CUPO DETECTADO: ${dateLabel}. Activando reserva asistida...`);
+  const timeLabel = slots.map((s) => s.time).filter(Boolean).slice(0, 4).join(', ');
+  log(`🟢 CUPO DETECTADO: ${dateLabel}${timeLabel ? ` (${timeLabel})` : ''}. Avisando...`);
   await page.bringToFront().catch(() => {});
   await page.screenshot({ path: `${SHOTS}FOUND-${dateLabel}.png`, fullPage: true }).catch(() => {});
-  try {
-    await clickDay(page, hit.day);
-    await page.screenshot({ path: `${SHOTS}FOUND-${dateLabel}-step2.png`, fullPage: true }).catch(() => {});
-    log('  Navegador avanzado al siguiente paso. Completa hora/datos y CONFIRMA.');
-  } catch (e) {
-    log('  No pude auto-avanzar (quedo en el calendario, clic manual en el dia verde):', e.message);
-  }
-  await alertOpen(CONFIG, { dateLabel, timeLabel: '' });
-  writeFileSync(LOCK, `FOUND ${dateLabel} at ${new Date().toISOString()}\n`);
-  log('  Alerta enviada. Dejo el navegador abierto. Termina la reserva a mano.');
+  await alertOpen(CONFIG, { dateLabel, timeLabel, note });
+  writeFileSync(LOCK, `FOUND ${dateLabel} ${timeLabel} at ${new Date().toISOString()}\n`.replace('  ', ' '));
+  log('  Alerta enviada. El navegador queda en la lista de franjas. Termina la reserva a mano.');
 }
 
 // Visible status banner so you can trust the bot is watching the whole range,
 // no matter which month the calendar happens to be showing.
-async function showBanner(page, hitCount) {
+async function showBanner(page, confirmedCount, note = '') {
   const txt = `🤖 Bot activo | ${CONFIG.applicants} solicitantes | Vigilando ${CONFIG.targetFrom} a ${CONFIG.targetTo} | `
-    + `ultimo chequeo ${new Date().toLocaleTimeString('es-CO')} | cupos en tu rango: ${hitCount} | `
-    + `proximo chequeo en ~${Math.round(CONFIG.pollIntervalMs / 1000)}s`;
+    + `ultimo chequeo ${new Date().toLocaleTimeString('es-CO')} | cupos confirmados: ${confirmedCount}`
+    + (note ? ` | ${note}` : '')
+    + ` | proximo chequeo en ~${Math.round(CONFIG.pollIntervalMs / 1000)}s`;
   await page.evaluate((t) => {
     let el = document.getElementById('__bot_banner__');
     if (!el) { el = document.createElement('div'); el.id = '__bot_banner__'; document.body.appendChild(el); }
@@ -220,11 +304,18 @@ async function main() {
       }
       log(`ciclo ${cycle} [solicitantes en el sitio: ${stockDom}]: ${parts.join(' | ')} | en tu rango: ${hits.length}`);
 
-      if (hits.length) { await handleOpen(page, hits[0]); found = true; break; }
+      let nofitNote = '';
+      if (hits.length) {
+        const dates = hits.map((h) => `${h.year}-${String(h.month).padStart(2, '0')}-${String(h.day).padStart(2, '0')}`).join(', ');
+        log(`  candidatos con circulo en rango: ${dates}. Verificando franjas por hora...`);
+        if (await verifyAndAlert(page, hits)) { found = true; break; }
+        nofitNote = `circulo en ${dates} pero sin franja para ${CONFIG.applicants} aun`;
+        await gotoCalendar(page); // verification leaves the day view; reset for the resting state
+      }
 
       // Rest on the first target month and show a status banner you can trust.
       await goToMonth(page, targets[0].year, targets[0].month).catch(() => {});
-      await showBanner(page, hits.length);
+      await showBanner(page, 0, nofitNote);
     } catch (e) {
       log('error en ciclo (continuo):', e.message);
       await page.screenshot({ path: `${SHOTS}error-cycle-${cycle}.png`, fullPage: true }).catch(() => {});

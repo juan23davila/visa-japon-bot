@@ -1,13 +1,18 @@
 # Bot de cita de visa | Embajada de Japon en Colombia
 
 Monitor que vigila el calendario de citas de visa de corta estancia
-(`embjpcol.rsvsys.jp`) durante toda la noche. Cuando un dia se abre
-(pasa de **× completo** a **○ disponible**) dentro de tu rango de fechas:
+(`embjpcol.rsvsys.jp`) durante toda la noche. La deteccion es en DOS niveles,
+porque el circulo **○** del calendario mensual solo significa "hay alguna plaza",
+no que alcance para tu numero de solicitantes:
 
-1. Trae el navegador al frente en la pagina de reserva.
-2. Avanza al siguiente paso dejando **2 solicitantes** listos (best-effort).
-3. Te dispara **WhatsApp** + **alarma sonora** en el Mac.
-4. Se detiene para que tu **confirmes a mano** (no maneja tus datos de pasaporte).
+1. **Nivel 1 (mes):** detecta dias que pasan de **× completo** a **○ disponible**
+   dentro de tu rango de fechas.
+2. **Nivel 2 (dia):** entra al dia, fija tu numero de solicitantes y exige una
+   **franja horaria reservable** (las franjas sin cupo suficiente salen en gris).
+   Sin franja valida, NO hay alerta (evita falsas alarmas de cupos para 1 persona).
+3. Si hay franja: trae el navegador al frente en la lista de horas, te dispara
+   **WhatsApp + llamada + alarma sonora**, y se detiene para que tu **confirmes a
+   mano** (no maneja tus datos de pasaporte).
 
 Modo de operacion: **"avisar y dejar listo"**. El bot NO envia la reserva ni
 escribe tus datos personales: te deja a un par de clics de confirmar.
@@ -16,8 +21,12 @@ escribe tus datos personales: te deja a un par de clics de confirmar.
 
 - No pide login para reservar.
 - No hay captcha ni verificacion por codigo de email en el flujo.
-- Existe el selector de "2 solicitantes" (`#stock`).
-- Un dia disponible se detecta por el link `js_move_reserve_for_day` en su celda.
+- Existe el selector de solicitantes (`#stock`) y **afecta la disponibilidad**: una
+  franja con 1 sola plaza aparece reservable para 1 pero gris para 2.
+- Dia con plazas en el mes = icono `icon_circle.svg`; lleno = `icon_disabled.svg`.
+- Franja reservable en la vista del dia = link a `reservations/option` con "残 N件";
+  franja sin cupo suficiente = texto plano gris "残 0件".
+- Los cupos por cancelacion duran MINUTOS: por eso el polling es frecuente.
 - A la fecha de construccion, **junio y julio estaban 100% llenos**: la via real
   es cazar cancelaciones o la apertura de fechas nuevas.
 
