@@ -63,7 +63,8 @@ npm start
 ```
 - Usa `caffeinate` para que el Mac no se duerma mientras vigila.
 - Abre una ventana de Chromium (dejala abierta, puedes minimizarla).
-- Para detener: `Ctrl+C`.
+- Para detener el bot usa `Ctrl+C` en la terminal. Si cierras la VENTANA del navegador
+  por error, el bot la reabre solo en el siguiente ciclo (auto-recuperacion), no se cae.
 - Cuando encuentra cupo crea `FOUND.lock` y se queda con el navegador abierto.
   Borra ese archivo para volver a activarlo: `rm FOUND.lock`.
 

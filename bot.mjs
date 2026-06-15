@@ -265,6 +265,26 @@ async function showBanner(page, confirmedCount, note = '') {
   }, txt).catch(() => {});
 }
 
+// Create a fresh browser/context/page. Used at startup and to auto-recover.
+export async function launchBrowser() {
+  const browser = await chromium.launch({ headless: CONFIG.headless });
+  const ctx = await browser.newContext({
+    locale: 'es-CO', timezoneId: 'America/Bogota', userAgent: UA, viewport: { width: 1366, height: 900 },
+  });
+  const page = await ctx.newPage();
+  return { browser, ctx, page };
+}
+
+// Return a live state; if the window/browser was closed (or crashed), relaunch it.
+// Keeps an overnight run alive even if the visible window is closed by accident.
+export async function ensureAlive(state) {
+  const alive = state && state.browser && state.browser.isConnected() && state.page && !state.page.isClosed();
+  if (alive) return state;
+  if (state && state.browser) { try { await state.browser.close(); } catch { /* already gone */ } }
+  log('  navegador no disponible (ventana cerrada o crash). Relanzando...');
+  return await launchBrowser();
+}
+
 async function main() {
   const arg = process.argv[2] || '';
   if (arg === '--test-alert') { await testAlert(CONFIG); return; }
@@ -281,11 +301,7 @@ async function main() {
   log(`WhatsApp       : ${CONFIG.whatsapp.phone ? 'configurado (' + CONFIG.whatsapp.phone + ')' : 'NO configurado'}`);
 
   mkdirSync(SHOTS, { recursive: true });
-  const browser = await chromium.launch({ headless: CONFIG.headless });
-  const ctx = await browser.newContext({
-    locale: 'es-CO', timezoneId: 'America/Bogota', userAgent: UA, viewport: { width: 1366, height: 900 },
-  });
-  const page = await ctx.newPage();
+  let state = await launchBrowser();
 
   const targets = monthsInRange(CONFIG.targetFrom, CONFIG.targetTo);
   log(`Meses a vigilar: ${targets.map((t) => `${t.year}-${String(t.month).padStart(2, '0')}`).join(', ')}`);
@@ -296,6 +312,8 @@ async function main() {
   do {
     cycle++;
     try {
+      state = await ensureAlive(state); // relaunch the browser if the window was closed
+      const { page } = state;
       await gotoCalendar(page);
       // Month-level reading uses the MOST permissive count (min): the circle is only a
       // trigger, and the day-level check decides how many applicants actually fit.
@@ -325,8 +343,8 @@ async function main() {
       await goToMonth(page, targets[0].year, targets[0].month).catch(() => {});
       await showBanner(page, 0, nofitNote);
     } catch (e) {
-      log('error en ciclo (continuo):', e.message);
-      await page.screenshot({ path: `${SHOTS}error-cycle-${cycle}.png`, fullPage: true }).catch(() => {});
+      log('error en ciclo (se reintenta el proximo ciclo):', e.message);
+      await state.page?.screenshot({ path: `${SHOTS}error-cycle-${cycle}.png`, fullPage: true }).catch(() => {});
     }
     if (once) break;
     const wait = CONFIG.pollIntervalMs + Math.floor((Math.random() * 2 - 1) * CONFIG.pollJitterMs);
@@ -337,7 +355,7 @@ async function main() {
     log('Cupo encontrado. Dejo el navegador ABIERTO. Cierra este proceso con Ctrl+C al terminar.');
     await new Promise(() => {}); // keep alive so the open window stays usable
   } else {
-    await browser.close();
+    await state.browser.close();
   }
 }
 
